@@ -1,23 +1,15 @@
-const multer =require( "multer")
-const fs =require( "fs")
+const multer = require('multer');
+const path = require('path');
 
-var DIR = './images/';
-if (!fs.existsSync(DIR)) { // CREATE DIRECTORY IF NOT FOUND
-fs.mkdirSync(DIR, { recursive: true });
-}
 const storage = multer.diskStorage({
-destination: (req, file, callback) => {
-
-callback(null, DIR);
-},
-filename: (req, file, callback) => {
-const name = file.originalname.split(' ').join('_');
-callback(null, name);
-}
-
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
 });
 
-const uploadFile = multer({
-storage: storage
-});
-module.exports={uploadFile};
+const uploadFile = multer({ storage });
+
+module.exports = { uploadFile };

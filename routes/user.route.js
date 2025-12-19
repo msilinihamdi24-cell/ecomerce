@@ -1,147 +1,210 @@
 const express = require('express');
 const router = express.Router();
-const User = require('../models/user.js');
+const User = require('../models/user');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const nodemailer=require('nodemailer');
-const { uploadFile } = require('../middleware/uploadfile')
-var transporter =nodemailer.createTransport({
-service:'gmail',
-auth:{
-user:'esps421@gmail.com',
-pass:'lnrqjuzysshlrpem'
-},
-tls:{
-rejectUnauthorized:false
-}
-})
-require('dotenv').config()
-//Register
-router.post('/register', uploadFile.single("avatar"),async (req, res) => {
-try {
-let { email, password, firstname, lastname } = req.body
-const avatar=req.file.filename
-const user = await User.findOne({ email })
-if (user) return res.status(404).send({ success: false, message: "User already exists" })
+const nodemailer = require('nodemailer');
+const { uploadFile } = require('../middleware/uploadfile');
+require('dotenv').config();
 
-const newUser = new User({ email, password, firstname, lastname,avatar })
-const createdUser = await newUser.save()
-// Envoyer l'e-mail de confirmation de l'inscription
-var mailOption ={
-from: '"verify your email " <esps421@gmail.com>',
-to: newUser.email,
-subject: 'vérification your email ',
-html:`<h2>${newUser.firstname}! thank you for registreting on our website</h2>
-<h4>please verify your email to procced.. </h4>
-<a
-href="http://${req.headers.host}/api/users/status/edit?email=${newUser.email}">click here</a>`
-}
-transporter.sendMail(mailOption,function(error,info){
-if(error){
-console.log(error)
-}
-else{
-console.log('verification email sent to your gmail account ')
-}
-})
-//const url =`http://localhost:3000/activate/${token}`;
-return res.status(201).send({ success: true, message: "Account created successfully", user: createdUser })
-} catch (err) {
-console.log(err)
-res.status(404).send({ success: false, message: err })
-}
+// =======================
+// Nodemailer config
+// =======================
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false,
+  },
 });
 
-// afficher la liste des utilisateurs.
-router.get('/', async (req, res, )=> {
-try {
-const users = await User.find().select("-password");
-res.status(200).json(users);
-} catch (error) {
-res.status(404).json({ message: error.message });
-}
+// =======================
+// REGISTER
+// =======================
+router.post('/register', uploadFile.single('avatar'), async (req, res) => {
+  try {
+    const { email, password, firstname, lastname } = req.body;
+
+    // avatar optionnel
+    const avatar = req.file ? req.file.filename : null;
+
+    const userExist = await User.findOne({ email });
+    if (userExist) {
+      return res.status(400).json({
+        success: false,
+        message: 'User already exists',
+      });
+    }
+
+    const newUser = new User({
+      email,
+      password,
+      firstname,
+      lastname,
+      avatar,
+    });
+
+    const createdUser = await newUser.save();
+
+    // Email de vérification
+    const mailOptions = {
+      from: `"Verify your email" <${process.env.EMAIL_USER}>`,
+      to: createdUser.email,
+      subject: 'Verify your email',
+      html: `
+        <h2>Hello ${createdUser.firstname}</h2>
+        <p>Please verify your email</p>
+        <a href="http://${req.headers.host}/api/users/status/edit?email=${createdUser.email}">
+          Click here
+        </a>
+      `,
+    };
+
+    transporter.sendMail(mailOptions, (err) => {
+      if (err) console.log(err);
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Account created successfully',
+      user: createdUser,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
 });
 
-// se connecter
+// =======================
+// GET ALL USERS
+// =======================
+router.get('/', async (req, res) => {
+  try {
+    const users = await User.find().select('-password');
+    res.status(200).json(users);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// =======================
+// LOGIN
+// =======================
 router.post('/login', async (req, res) => {
-try {
-let { email, password } = req.body
-if (!email || !password) {
-return res.status(404).send({ success: false, message: "All fields are required" })
-}
-let user = await User.findOne({ email }).select('+password').select('+isActive')
+  try {
+    const { email, password } = req.body;
 
-if (!user) {
-  return res.status(404).send({ success: false, message: "Account doesn't exists" })
-} else {
-let isCorrectPassword = await bcrypt.compare(password, user.password)
-if (isCorrectPassword) {
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required',
+      });
+    }
 
-delete user._doc.password
-if (!user.isActive) return res.status(200).send({ success: false,
-message: 'Your account is inactive, Please contact your administrator' })
+    const user = await User.findOne({ email }).select('+password +isActive');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Account doesn't exist",
+      });
+    }
 
-const token = generateAccessToken(user);
-const refreshToken = generateRefreshToken(user);
-return res.status(200).send({ success: true, user,token,refreshToken })
-} else {
-return res.status(404).send({ success: false, message: "Please verify your credentials" })
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials',
+      });
+    }
 
-}
-}
-} catch (err) {
-return res.status(404).send({ success: false, message: err.message })
-}
-});
-//Access Token
-const generateAccessToken=(user) =>{
-return jwt.sign ({ iduser: user._id, role: user.role }, process.env.SECRET, {
-expiresIn: '60s'})
-}
-// Refresh
-function generateRefreshToken(user) {
-return jwt.sign ({ iduser: user._id, role: user.role },
-process.env.REFRESH_TOKEN_SECRET, { expiresIn: '1y'})
-}
-//Refresh Route
-router.post('/refreshToken', async (req, res, )=> {
-console.log(req.body.refreshToken)
-const refreshtoken = req.body.refreshToken;
-if (!refreshtoken) {
-return res.status(404).send({success: false, message: 'Token Not Found' });
-}
-else {
-jwt.verify(refreshtoken, process.env.REFRESH_TOKEN_SECRET, (err, user) => {
-if (err) { console.log(err)
-return res.status(406).send({ success: false,message: 'Unauthorized' });
-}
-else {
-const token = generateAccessToken(user);
-const refreshToken = generateRefreshToken(user);
-console.log("token-------",token);
-res.status(200).send({success: true,
-token,
-refreshToken
-})
-}
-});
-}
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account inactive',
+      });
+    }
 
+    delete user._doc.password;
+
+    const token = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    res.status(200).json({
+      success: true,
+      user,
+      token,
+      refreshToken,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-/**
-* as an admin i can disable or enable an account
-*/
-router.get('/status/edit/', async (req, res) => {
-try {
-let email = req.query.email
-console.log(email)
-let user = await User.findOne({email})
-user.isActive = !user.isActive
-user.save()
-res.status(200).send({ success: true, user })
-} catch (err) {
-return res.status(404).send({ success: false, message: err })
-}
-})
+// =======================
+// ACTIVATE / DEACTIVATE USER
+// =======================
+router.get('/status/edit', async (req, res) => {
+  try {
+    const email = req.query.email;
+    const user = await User.findOne({ email });
+
+    user.isActive = !user.isActive;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// =======================
+// TOKENS
+// =======================
+const generateAccessToken = (user) => {
+  return jwt.sign(
+    { iduser: user._id, role: user.role },
+    process.env.SECRET,
+    { expiresIn: '60s' }
+  );
+};
+
+const generateRefreshToken = (user) => {
+  return jwt.sign(
+    { iduser: user._id, role: user.role },
+    process.env.REFRESH_TOKEN_SECRET,
+    { expiresIn: '1y' }
+  );
+};
+
+router.post('/refreshToken', (req, res) => {
+  const refreshToken = req.body.refreshToken;
+
+  if (!refreshToken) {
+    return res.status(401).json({ message: 'Token not found' });
+  }
+
+  jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    const newToken = generateAccessToken(user);
+    const newRefresh = generateRefreshToken(user);
+
+    res.status(200).json({
+      token: newToken,
+      refreshToken: newRefresh,
+    });
+  });
+});
+
 module.exports = router;
